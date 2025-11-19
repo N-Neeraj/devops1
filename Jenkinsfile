@@ -2,17 +2,18 @@ pipeline {
   agent any
 
   environment {
-    AWS_REGION = 'us-east-1'
-    AWS_ACCOUNT_ID = '396626623766'
-    ECR_REPO = 'ci-cd-sample'
-    IMAGE_TAG = "${env.BUILD_NUMBER}"
-    ECR_URI = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}"
-    SUBNETS = 'subnet-0d2bf45bd1114b376'
-    SECURITY_GROUPS = 'sg-0e0da67de7e196a4e'
+    AWS_REGION       = 'us-east-1'
+    AWS_ACCOUNT_ID   = '396626623766'
+    ECR_REPO         = 'ci-cd-sample'
+    IMAGE_TAG        = "${env.BUILD_NUMBER}"
+    ECR_URI          = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}"
+    SUBNETS          = 'subnet-0d2bf45bd1114b376'
+    SECURITY_GROUPS  = 'sg-0e0da67de7e196a4e'
   }
 
   stages {
 
+    /* ------------------------ CHECKOUT ------------------------ */
     stage('Checkout') {
       steps {
         checkout([$class: 'GitSCM',
@@ -25,6 +26,7 @@ pipeline {
       }
     }
 
+    /* ------------------------ BUILD & TEST ------------------------ */
     stage('Build & Test') {
       steps {
         sh 'npm install'
@@ -32,12 +34,14 @@ pipeline {
       }
     }
 
+    /* ------------------------ DOCKER BUILD ------------------------ */
     stage('Docker Build') {
       steps {
         sh "docker build -t ${ECR_REPO}:${IMAGE_TAG} ."
       }
     }
 
+    /* ------------------------ LOGIN TO ECR ------------------------ */
     stage('Login to ECR') {
       steps {
         withCredentials([usernamePassword(credentialsId: 'aws-jenkins-creds',
@@ -50,12 +54,13 @@ pipeline {
             aws configure set default.region ${AWS_REGION}
 
             aws ecr get-login-password --region ${AWS_REGION} \
-            | docker login --username AWS --password-stdin ${ECR_URI}
+              | docker login --username AWS --password-stdin ${ECR_URI}
           '''
         }
       }
     }
 
+    /* ------------------------ PUSH TO ECR ------------------------ */
     stage('Tag & Push to ECR') {
       steps {
         sh "docker tag ${ECR_REPO}:${IMAGE_TAG} ${ECR_URI}:${IMAGE_TAG}"
@@ -63,11 +68,12 @@ pipeline {
       }
     }
 
-    stage('(Optional) Push to Docker Hub') {
-      when { expression { return false } } // change to true if needed
+    /* ------------------------ ALWAYS PUSH TO DOCKER HUB ------------------------ */
+    stage('Push to Docker Hub') {
       steps {
         withCredentials([usernamePassword(credentialsId: 'dockerhub-creds',
-          usernameVariable: 'DH_USER', passwordVariable: 'DH_PASS')]) {
+          usernameVariable: 'DH_USER',
+          passwordVariable: 'DH_PASS')]) {
 
           sh '''
             echo $DH_PASS | docker login --username $DH_USER --password-stdin
@@ -78,6 +84,7 @@ pipeline {
       }
     }
 
+    /* ------------------------ DEPLOY TO ECS ------------------------ */
     stage('Register Task & Deploy to ECS') {
       steps {
         withCredentials([usernamePassword(credentialsId: 'aws-jenkins-creds',
@@ -91,7 +98,7 @@ pipeline {
 
             aws logs create-log-group --log-group-name /ecs/${ECR_REPO} 2>/dev/null || true
 
-            cat > taskdef.json <<TASKDEF
+            cat > taskdef.json <<EOF
             {
               "family": "${ECR_REPO}",
               "networkMode": "awsvpc",
@@ -116,18 +123,26 @@ pipeline {
                 }
               ]
             }
-            TASKDEF
+            EOF
 
             aws ecs register-task-definition --cli-input-json file://taskdef.json
 
             aws ecs create-cluster --cluster-name ${ECR_REPO} || true
 
-            SERVICE=$(aws ecs describe-services --cluster ${ECR_REPO} --services ${ECR_REPO} --query 'services[0].status' --output text 2>/dev/null || true)
+            SERVICE=$(aws ecs describe-services \
+                        --cluster ${ECR_REPO} \
+                        --services ${ECR_REPO} \
+                        --query 'services[0].status' \
+                        --output text 2>/dev/null || true)
 
             if [ "$SERVICE" = "ACTIVE" ]; then
-              aws ecs update-service --cluster ${ECR_REPO} --service ${ECR_REPO} --force-new-deployment
+              aws ecs update-service \
+                --cluster ${ECR_REPO} \
+                --service ${ECR_REPO} \
+                --force-new-deployment
             else
-              aws ecs create-service --cluster ${ECR_REPO} \
+              aws ecs create-service \
+                --cluster ${ECR_REPO} \
                 --service-name ${ECR_REPO} \
                 --task-definition ${ECR_REPO} \
                 --desired-count 1 \
@@ -141,9 +156,10 @@ pipeline {
 
   }
 
+  /* ------------------------ POST ACTIONS ------------------------ */
   post {
     success {
-      echo 'Pipeline succeeded — deployed to ECS!'
+      echo 'Pipeline succeeded — image pushed to ECR & Docker Hub, deployment completed!'
     }
     failure {
       echo 'Pipeline failed — check logs.'
