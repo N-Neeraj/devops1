@@ -1,6 +1,11 @@
 pipeline {
   agent any
 
+  /* ------------------------ GITHUB WEBHOOK TRIGGER ------------------------ */
+  triggers {
+    githubPush()   // <-- This makes Jenkins build automatically on every GitHub push
+  }
+
   environment {
     AWS_REGION       = 'us-east-1'
     AWS_ACCOUNT_ID   = '396626623766'
@@ -18,6 +23,8 @@ pipeline {
       steps {
         checkout([$class: 'GitSCM',
           branches: [[name: '*/main']],
+          doGenerateSubmoduleConfigurations: false,
+          extensions: [],
           userRemoteConfigs: [[
             url: 'https://github.com/N-Neeraj/devops1.git',
             credentialsId: 'github-token'
@@ -44,10 +51,11 @@ pipeline {
     /* ------------------------ LOGIN TO ECR ------------------------ */
     stage('Login to ECR') {
       steps {
-        withCredentials([usernamePassword(credentialsId: 'aws-jenkins-creds',
+        withCredentials([usernamePassword(
+          credentialsId: 'aws-jenkins-creds',
           usernameVariable: 'AWS_ACCESS_KEY_ID',
-          passwordVariable: 'AWS_SECRET_ACCESS_KEY')]) {
-
+          passwordVariable: 'AWS_SECRET_ACCESS_KEY'
+        )]) {
           sh '''
             aws configure set aws_access_key_id $AWS_ACCESS_KEY_ID
             aws configure set aws_secret_access_key $AWS_SECRET_ACCESS_KEY
@@ -68,12 +76,14 @@ pipeline {
       }
     }
 
-    /* ------------------------ ALWAYS PUSH TO DOCKER HUB ------------------------ */
+    /* ------------------------ PUSH TO DOCKER HUB ------------------------ */
     stage('Push to Docker Hub') {
       steps {
-        withCredentials([usernamePassword(credentialsId: 'dockerhub-creds',
+        withCredentials([usernamePassword(
+          credentialsId: 'dockerhub-creds',
           usernameVariable: 'DH_USER',
-          passwordVariable: 'DH_PASS')]) {
+          passwordVariable: 'DH_PASS'
+        )]) {
 
           sh '''
             echo $DH_PASS | docker login --username $DH_USER --password-stdin
@@ -87,9 +97,11 @@ pipeline {
     /* ------------------------ DEPLOY TO ECS ------------------------ */
     stage('Register Task & Deploy to ECS') {
       steps {
-        withCredentials([usernamePassword(credentialsId: 'aws-jenkins-creds',
+        withCredentials([usernamePassword(
+          credentialsId: 'aws-jenkins-creds',
           usernameVariable: 'AWS_ACCESS_KEY_ID',
-          passwordVariable: 'AWS_SECRET_ACCESS_KEY')]) {
+          passwordVariable: 'AWS_SECRET_ACCESS_KEY'
+        )]) {
 
           sh '''
             aws configure set aws_access_key_id $AWS_ACCESS_KEY_ID
@@ -153,13 +165,11 @@ pipeline {
         }
       }
     }
-
   }
 
-  /* ------------------------ POST ACTIONS ------------------------ */
   post {
     success {
-      echo 'Pipeline succeeded — image pushed to ECR & Docker Hub, deployment completed!'
+      echo 'Pipeline succeeded — auto-triggered via GitHub Webhook!'
     }
     failure {
       echo 'Pipeline failed — check logs.'
